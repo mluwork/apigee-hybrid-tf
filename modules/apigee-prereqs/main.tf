@@ -47,6 +47,6 @@ module "project" {
 
   # additional IAM grants to service accounts or groups
   iam_additive = {
-    "roles/editor"       = ["serviceAccount:${var.tf_service_account}"]
+    "roles/editor" = ["serviceAccount:${var.tf_service_account}"]
   }
 }

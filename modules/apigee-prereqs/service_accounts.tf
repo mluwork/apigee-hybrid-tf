@@ -48,25 +48,57 @@ locals {
   }
 
   env_hash = { for k, v in var.apigee_environments : k => format("%s-%s", substr(k, 0, 15), substr(sha256(format("%s:%s", local.apigee_org, k)), 0, 7)) }
+
+  # in order to avoid recreating service accounts, we will read the service
+  # accounts with data apigee_sa_precheck, then loop through the list of 
+  # profiles to build a new profile list which only conains the SAs to be 
+  # created. After that we will use another data source to read all SAs
+  profiles = toset(flatten([
+    for p in var.profiles : [
+      data.google_service_account.apigee_sa_precheck[p] != null ? [] : [p]
+    ]
+  ]))
+
 }
 
-# create GCP service accounts and role bindings 
+# pull SA data before creating new ones
+data "google_service_account" "apigee_sa_precheck" {
+  for_each = var.profiles
+
+  project    = var.project_id
+  account_id = each.value
+}
+
+# pull all SAs data after ceation
+data "google_service_account" "apigee_sa" {
+  for_each = var.profiles
+
+  project    = var.project_id
+  account_id = each.value
+
+  depends_on = [
+    local.profiles,
+    google_service_account.apigee_sa
+  ]
+}
+
+# create GCP service accounts for the ones do not exist 
 
 resource "google_service_account" "apigee_sa" {
-  for_each = var.profiles
+  for_each = local.profiles
 
   account_id   = each.value
   display_name = "${each.value}-apigee-sa"
   project      = var.project_id
 }
 
-# create GCP service accounts and role bindings
+# create GCP service accounts role bindings
 
 resource "google_project_iam_member" "apigee_sa" {
   for_each = local.role_sa_map
   project  = var.project_id
   role     = each.value.role
-  member   = "serviceAccount:${google_service_account.apigee_sa[each.value.sa].email}"
+  member   = "serviceAccount:${data.google_service_account.apigee_sa[each.value.sa].email}"
 }
 
 
@@ -74,7 +106,7 @@ resource "google_project_iam_member" "apigee_sa" {
 
 resource "google_service_account_iam_binding" "sa_binding" {
   for_each           = local.ksa_gsa_map
-  service_account_id = google_service_account.apigee_sa[each.value].name
+  service_account_id = data.google_service_account.apigee_sa[each.value].name
   role               = "roles/iam.workloadIdentityUser"
   members            = ["serviceAccount:${var.project_id}.svc.id.goog[apigee/-${each.key}-${local.gen_name}-sa]"]
   depends_on = [
@@ -86,7 +118,7 @@ resource "google_service_account_iam_binding" "sa_binding" {
 
 resource "google_service_account_iam_binding" "env_runtime_sa_binding" {
   for_each           = local.env_hash
-  service_account_id = google_service_account.apigee_sa["apigee-runtime"].name
+  service_account_id = data.google_service_account.apigee_sa["apigee-runtime"].name
   role               = "roles/iam.workloadIdentityUser"
   members            = ["serviceAccount:${var.project_id}.svc.id.goog[apigee/apigee-runtime-${local.gen_name}-${each.value}-sa]"]
   depends_on = [
@@ -96,7 +128,7 @@ resource "google_service_account_iam_binding" "env_runtime_sa_binding" {
 
 resource "google_service_account_iam_binding" "env_synchronizer_sa_binding" {
   for_each           = local.env_hash
-  service_account_id = google_service_account.apigee_sa["apigee-synchronizer"].name
+  service_account_id = data.google_service_account.apigee_sa["apigee-synchronizer"].name
   role               = "roles/iam.workloadIdentityUser"
   members            = ["serviceAccount:${var.project_id}.svc.id.goog[apigee/apigee-synchronizer-${local.gen_name}-${each.value}-sa]"]
   depends_on = [
@@ -106,7 +138,7 @@ resource "google_service_account_iam_binding" "env_synchronizer_sa_binding" {
 
 resource "google_service_account_iam_binding" "env_udca_sa_binding" {
   for_each           = local.env_hash
-  service_account_id = google_service_account.apigee_sa["apigee-udca"].name
+  service_account_id = data.google_service_account.apigee_sa["apigee-udca"].name
   role               = "roles/iam.workloadIdentityUser"
   members            = ["serviceAccount:${var.project_id}.svc.id.goog[apigee/apigee-udca-${local.gen_name}-${each.value}-sa]"]
   depends_on = [
